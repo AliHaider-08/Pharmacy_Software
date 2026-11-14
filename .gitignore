@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+.vs/
+.codex-tmp/
+.vscode/AppData/
+.vscode/.dotnet/
+.vscode/packages/
