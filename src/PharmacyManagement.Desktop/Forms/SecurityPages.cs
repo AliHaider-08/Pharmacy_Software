@@ -49,12 +49,33 @@ public sealed class LoginDialog : Form
     public LoginDialog(IUserService users)
     {
         _users = users;
-        Text = "Sign in · Pharmacy Management"; StartPosition = FormStartPosition.CenterScreen; FormBorderStyle = FormBorderStyle.FixedDialog; ClientSize = new Size(450, 280); MaximizeBox = false; MinimizeBox = false; Font = new Font("Segoe UI", 9.5f); BackColor = PharmacyColors.Background;
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, Padding = new Padding(28) }; layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); Controls.Add(layout);
+        Text = "Sign in · Pharmacy Management"; StartPosition = FormStartPosition.CenterScreen; FormBorderStyle = FormBorderStyle.FixedDialog; ClientSize = new Size(450, 320); MaximizeBox = false; MinimizeBox = false; Font = new Font("Segoe UI", 9.5f); BackColor = PharmacyColors.Background;
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 5, Padding = new Padding(28) }; layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); Controls.Add(layout);
         var title = new Label { Text = "Welcome back", AutoSize = true, ForeColor = PharmacyColors.Text, Font = new Font("Segoe UI Semibold", 18f, FontStyle.Bold) }; layout.Controls.Add(title, 0, 0); layout.SetColumnSpan(title, 2);
         Add(layout, 1, "Username", _username); Add(layout, 2, "Password", _password);
         var login = DataPage.ActionButton("Sign in", true); login.Anchor = AnchorStyles.Right; layout.Controls.Add(login, 1, 3); login.Click += async (_, _) => await AuthenticateAsync();
+        var recover = new LinkLabel { Text = "Forgot password? Recover administrator access", AutoSize = true, Anchor = AnchorStyles.Right, LinkColor = PharmacyColors.Teal };
+        layout.Controls.Add(recover, 1, 4); recover.Click += async (_, _) => await RecoverPasswordAsync();
         AcceptButton = login;
+    }
+
+    private async Task RecoverPasswordAsync()
+    {
+        using var dialog = new AdministratorPasswordRecoveryDialog();
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            User = await _users.RecoverAdministratorPasswordAsync(dialog.Username, dialog.NewPassword);
+            if (User is null)
+            {
+                MessageBox.Show("No active administrator account has that username.", "Recovery failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            MessageBox.Show("Administrator password updated. You are now signed in.", "Recovery complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+        catch (Exception ex) { DataPage.ShowError(ex); }
     }
 
     private async Task AuthenticateAsync()
@@ -69,6 +90,37 @@ public sealed class LoginDialog : Form
     }
 
     internal static void Add(TableLayoutPanel table, int row, string label, Control field) { table.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left }, 0, row); field.Dock = DockStyle.Fill; table.Controls.Add(field, 1, row); }
+}
+
+internal sealed class AdministratorPasswordRecoveryDialog : Form
+{
+    private readonly TextBox _username = new();
+    private readonly TextBox _password = new() { UseSystemPasswordChar = true };
+    private readonly TextBox _confirm = new() { UseSystemPasswordChar = true };
+    public string Username => _username.Text.Trim();
+    public string NewPassword => _password.Text;
+
+    public AdministratorPasswordRecoveryDialog()
+    {
+        Text = "Recover administrator access"; StartPosition = FormStartPosition.CenterParent; FormBorderStyle = FormBorderStyle.FixedDialog;
+        ClientSize = new Size(500, 300); MaximizeBox = false; MinimizeBox = false; Font = new Font("Segoe UI", 9.5f); BackColor = PharmacyColors.Background;
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 5, Padding = new Padding(26) };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); Controls.Add(layout);
+        var note = new Label { Text = "Reset the password for an active administrator in this computer's local pharmacy database.", AutoSize = true, MaximumSize = new Size(300, 0), ForeColor = PharmacyColors.Muted };
+        layout.Controls.Add(note, 0, 0); layout.SetColumnSpan(note, 2);
+        LoginDialog.Add(layout, 1, "Admin username", _username);
+        LoginDialog.Add(layout, 2, "New password", _password);
+        LoginDialog.Add(layout, 3, "Confirm password", _confirm);
+        var save = DataPage.ActionButton("Set password", true); save.Anchor = AnchorStyles.Right; layout.Controls.Add(save, 1, 4);
+        save.Click += (_, _) =>
+        {
+            if (Username.Length < 3) { MessageBox.Show("Enter the administrator username."); return; }
+            if (NewPassword.Length < 10) { MessageBox.Show("Use a password with at least 10 characters."); return; }
+            if (NewPassword != _confirm.Text) { MessageBox.Show("The passwords do not match."); return; }
+            DialogResult = DialogResult.OK; Close();
+        };
+        AcceptButton = save;
+    }
 }
 
 public sealed class UserManagementPage : DataPage

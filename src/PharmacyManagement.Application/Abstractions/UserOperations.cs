@@ -7,6 +7,7 @@ public interface IUserService
 {
     Task<bool> HasUsersAsync(CancellationToken cancellationToken = default);
     Task<AuthenticatedUser?> AuthenticateAsync(string username, string password, CancellationToken cancellationToken = default);
+    Task<AuthenticatedUser?> RecoverAdministratorPasswordAsync(string username, string newPassword, CancellationToken cancellationToken = default);
     Task CreateInitialAdministratorAsync(string username, string password, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<UserListItem>> GetUsersAsync(CancellationToken cancellationToken = default);
     Task CreateUserAsync(string username, string password, string role, CancellationToken cancellationToken = default);

@@ -28,6 +28,26 @@ public sealed class UserService(PharmacyDbContext db, IUserSession session) : IU
         return new AuthenticatedUser(user.Id, user.Username, user.Role);
     }
 
+    public async Task<AuthenticatedUser?> RecoverAdministratorPasswordAsync(string username, string newPassword, CancellationToken cancellationToken = default)
+    {
+        ValidatePassword(newPassword);
+        var normalized = username.Trim();
+        var user = await db.Users.SingleOrDefaultAsync(x => x.Username == normalized && x.Role == "Administrator" && x.IsActive, cancellationToken);
+        if (user is null) return null;
+
+        user.PasswordHash = HashPassword(newPassword);
+        db.AuditLogs.Add(new AuditLog
+        {
+            UserId = user.Id,
+            OccurredAtUtc = DateTime.UtcNow,
+            Action = "Administrator password recovered locally",
+            EntityName = "AppUser",
+            EntityId = user.Id.ToString()
+        });
+        await db.SaveChangesAsync(cancellationToken);
+        return new AuthenticatedUser(user.Id, user.Username, user.Role);
+    }
+
     public async Task CreateInitialAdministratorAsync(string username, string password, CancellationToken cancellationToken = default)
     {
         ValidateCredentials(username, password);
