@@ -66,6 +66,42 @@ public sealed class CatalogService(PharmacyDbContext db, IUserSession session) :
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task SaveMedicineWithOpeningStockAsync(MedicineWithOpeningStockInput input, CancellationToken cancellationToken = default)
+    {
+        UserAuthorization.RequireManager(session);
+        if (input.OpeningQuantity < 0) throw new InvalidOperationException("Opening stock cannot be negative.");
+        if (input.OpeningQuantity == 0)
+        {
+            await SaveMedicineAsync(input.Medicine, cancellationToken);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(input.BatchNumber)) throw new InvalidOperationException("Enter a batch number when adding opening stock.");
+        if (input.Medicine.Id.HasValue) throw new InvalidOperationException("Opening stock can only be entered when adding a new medicine. Use Inventory to add batches to an existing medicine.");
+        if (input.ExpiryDate is not null && input.ExpiryDate < DateOnly.FromDateTime(DateTime.Today))
+            throw new InvalidOperationException("Opening stock cannot use an expiry date in the past.");
+        var batchNumber = input.BatchNumber.Trim();
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        await SaveMedicineAsync(input.Medicine, cancellationToken);
+        var medicine = db.ChangeTracker.Entries<Medicine>().Single(x => x.State == EntityState.Added).Entity;
+
+        var batch = new StockBatch
+        {
+            MedicineId = medicine.Id,
+            BatchNumber = batchNumber,
+            ExpiryDate = input.ExpiryDate,
+            PurchasePrice = input.Medicine.PurchasePrice,
+            SalePrice = input.Medicine.SalePrice,
+            QuantityOnHand = input.OpeningQuantity,
+            SupplierId = input.SupplierId
+        };
+        db.StockBatches.Add(batch);
+        await db.SaveChangesAsync(cancellationToken);
+        db.StockMovements.Add(new StockMovement { BatchId = batch.Id, OccurredAtUtc = DateTime.UtcNow, MovementType = "Opening stock", QuantityChange = input.OpeningQuantity, UserId = session.Current?.Id ?? 1, Notes = "Initial stock entered with medicine" });
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task SetMedicineActiveAsync(int medicineId, bool isActive, CancellationToken cancellationToken = default)
     {
         UserAuthorization.RequireManager(session);

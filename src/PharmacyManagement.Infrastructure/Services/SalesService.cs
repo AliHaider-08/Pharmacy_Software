@@ -61,12 +61,27 @@ public sealed class SalesService(PharmacyDbContext db, IUserSession session) : I
         db.Sales.Add(sale);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new CheckoutResult(invoice, subtotal, discount, total, sale.PaidAmount, Math.Max(0, request.PaidAmount - total));
+        var receiptLines = sale.Lines.Select(line => new CheckoutLine(
+            line.Batch.Medicine.Name,
+            line.Quantity,
+            line.UnitPrice,
+            line.Discount,
+            line.UnitPrice * line.Quantity - line.Discount)).ToList();
+        return new CheckoutResult(invoice, sale.SoldAtUtc.ToLocalTime(), subtotal, discount, total, sale.PaidAmount, Math.Max(0, request.PaidAmount - total), sale.PaymentMethod, receiptLines);
     }
 
     public async Task<IReadOnlyList<SaleListItem>> GetRecentSalesAsync(CancellationToken cancellationToken = default)
     {
         var sales = await db.Sales.AsNoTracking().OrderByDescending(x => x.SoldAtUtc).Take(100).ToListAsync(cancellationToken);
         return sales.Select(x => new SaleListItem(x.InvoiceNumber, x.SoldAtUtc.ToLocalTime(), x.GrandTotal, x.PaidAmount, x.PaymentMethod)).ToList();
+    }
+
+    public async Task<CheckoutResult> GetReceiptAsync(string invoiceNumber, CancellationToken cancellationToken = default)
+    {
+        var sale = await db.Sales.AsNoTracking().Include(x => x.Lines).ThenInclude(x => x.Batch).ThenInclude(x => x.Medicine)
+            .SingleOrDefaultAsync(x => x.InvoiceNumber == invoiceNumber, cancellationToken)
+            ?? throw new InvalidOperationException("Sale receipt was not found.");
+        var lines = sale.Lines.Select(line => new CheckoutLine(line.Batch.Medicine.Name, line.Quantity, line.UnitPrice, line.Discount, line.UnitPrice * line.Quantity - line.Discount)).ToList();
+        return new CheckoutResult(sale.InvoiceNumber, sale.SoldAtUtc.ToLocalTime(), sale.Subtotal, sale.Discount, sale.GrandTotal, sale.PaidAmount, Math.Max(0, sale.PaidAmount - sale.GrandTotal), sale.PaymentMethod, lines);
     }
 }

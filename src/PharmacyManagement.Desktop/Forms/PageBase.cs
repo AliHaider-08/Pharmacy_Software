@@ -85,8 +85,8 @@ public sealed class DashboardPage : UserControl
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         Controls.Add(layout);
         var heading = new Panel { Dock = DockStyle.Fill };
-        heading.Controls.Add(new Label { Text = "Dashboard", AutoSize = true, Font = new Font("Segoe UI Semibold", 21f, FontStyle.Bold), ForeColor = PharmacyColors.Text, Location = new Point(0, 0) });
-        heading.Controls.Add(new Label { Text = "Live snapshot from your local pharmacy records", AutoSize = true, Font = new Font("Segoe UI", 9f), ForeColor = PharmacyColors.Muted, Location = new Point(2, 44) });
+        heading.Controls.Add(new Label { Text = "Your pharmacy today", AutoSize = true, Font = new Font("Segoe UI Semibold", 21f, FontStyle.Bold), ForeColor = PharmacyColors.Text, Location = new Point(0, 0) });
+        heading.Controls.Add(new Label { Text = "Quick view of sales, stock and items that need attention", AutoSize = true, Font = new Font("Segoe UI", 9f), ForeColor = PharmacyColors.Muted, Location = new Point(2, 44) });
         layout.Controls.Add(heading, 0, 0);
         layout.Controls.Add(_cards, 0, 1);
         Load += async (_, _) => await RefreshAsync();
@@ -96,18 +96,15 @@ public sealed class DashboardPage : UserControl
     {
         try
         {
-            _currencyCode = (await _settings.GetSettingsAsync()).CurrencyCode;
-            var s = await _dashboard.GetSummaryAsync();
+            var settings = await _settings.GetSettingsAsync();
+            _currencyCode = settings.CurrencyCode;
+            var s = await _dashboard.GetSummaryAsync(settings.ExpiryAlertDays);
             _cards.Controls.Clear();
-            Add("Medicines", s.MedicineCount.ToString("N0"), "Active catalog", PharmacyColors.Navy);
-            Add("Stock on hand", s.StockUnits.ToString("N0"), "Units across batches", PharmacyColors.Teal);
-            Add("Sales today", $"{_currencyCode} {s.SalesToday:N2}", "Completed invoices", Color.FromArgb(35, 134, 91));
-            Add("Purchases today", $"{_currencyCode} {s.PurchasesToday:N2}", "Supplier invoices", Color.FromArgb(36, 91, 143));
-            Add("Gross profit", $"{_currencyCode} {s.ProfitToday:N2}", "Actual batch cost", Color.FromArgb(35, 134, 91));
-            Add("Low stock", s.LowStockMedicineCount.ToString("N0"), "At or below minimum", Color.FromArgb(230, 162, 60));
-            Add("Near expiry", s.ExpiringBatchCount.ToString("N0"), "Within 90 days", Color.FromArgb(217, 83, 79));
-            Add("Suppliers", s.SupplierCount.ToString("N0"), "Registered suppliers", PharmacyColors.Navy);
-            Add("Customers", s.CustomerCount.ToString("N0"), "Registered customers", PharmacyColors.Navy);
+            if (settings.ShowDashboardSales) Add("Sales today", $"{_currencyCode} {s.SalesToday:N2}", "Today's completed sales", Color.FromArgb(35, 134, 91));
+            if (settings.ShowDashboardMedicines) Add("Medicines", s.MedicineCount.ToString("N0"), "In your catalog", PharmacyColors.Navy);
+            if (settings.ShowDashboardStock) Add("Stock on hand", s.StockUnits.ToString("N0"), "Units across batches", PharmacyColors.Teal);
+            if (settings.ShowDashboardLowStock) Add("Low stock", s.LowStockMedicineCount.ToString("N0"), "At or below reorder level", Color.FromArgb(230, 162, 60));
+            if (settings.ShowDashboardExpiry) Add("Near expiry", s.ExpiringBatchCount.ToString("N0"), $"Within {settings.ExpiryAlertDays} days", Color.FromArgb(217, 83, 79));
         }
         catch (Exception ex) { _cards.Controls.Clear(); Add("Dashboard error", "!", ex.Message, Color.FromArgb(217, 83, 79)); }
     }

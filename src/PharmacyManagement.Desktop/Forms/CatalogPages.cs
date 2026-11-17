@@ -92,6 +92,9 @@ internal sealed class MedicineEditor : Form
     private readonly NumericUpDown _sale = MoneyInput();
     private readonly NumericUpDown _minimum = new() { Minimum = 0, Maximum = 1000000, ThousandsSeparator = true };
     private readonly TextBox _unit = new() { Text = "Unit" };
+    private readonly TextBox _batchNumber = new();
+    private readonly DateTimePicker _batchExpiry = new() { Format = DateTimePickerFormat.Short, ShowCheckBox = true, Checked = false };
+    private readonly NumericUpDown _openingQuantity = new() { Minimum = 0, Maximum = 10000000, ThousandsSeparator = true };
 
     public MedicineEditor(ICatalogService catalog, IReadOnlyList<Category> categories, MedicineListItem? existing)
     {
@@ -102,9 +105,9 @@ internal sealed class MedicineEditor : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(520, 600);
+        ClientSize = new Size(560, 760);
         Font = new Font("Segoe UI", 9f);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 12, Padding = new Padding(18), AutoScroll = true };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 16, Padding = new Padding(18), AutoScroll = true };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         Controls.Add(layout);
@@ -124,6 +127,11 @@ internal sealed class MedicineEditor : Form
         AddField(layout, 8, "Sale price", _sale);
         AddField(layout, 9, "Minimum stock", _minimum);
         AddField(layout, 10, "Unit", _unit);
+        var stockHeading = new Label { Text = "Opening stock (optional)", AutoSize = true, Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = PharmacyColors.Navy, Anchor = AnchorStyles.Left };
+        layout.Controls.Add(stockHeading, 0, 11); layout.SetColumnSpan(stockHeading, 2);
+        AddField(layout, 12, "Initial quantity", _openingQuantity);
+        AddField(layout, 13, "Batch number", _batchNumber);
+        AddField(layout, 14, "Expiry date", _batchExpiry);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         var save = DataPage.ActionButton("Save medicine", true);
         var cancel = DataPage.ActionButton("Cancel");
@@ -131,7 +139,7 @@ internal sealed class MedicineEditor : Form
         cancel.Click += (_, _) => DialogResult = DialogResult.Cancel;
         actions.Controls.Add(save);
         actions.Controls.Add(cancel);
-        layout.Controls.Add(actions, 1, 11);
+        layout.Controls.Add(actions, 1, 15);
 
         if (existing is not null)
         {
@@ -153,7 +161,8 @@ internal sealed class MedicineEditor : Form
     {
         try
         {
-            await _catalog.SaveMedicineAsync(new MedicineInput(_existing?.Id, _name.Text, _generic.Text, _brand.Text, _category.SelectedValue is int id ? id : null, _manufacturer.Text, _barcode.Text, _description.Text, _purchase.Value, _sale.Value, (int)_minimum.Value, _unit.Text));
+            var medicineInput = new MedicineInput(_existing?.Id, _name.Text, _generic.Text, _brand.Text, _category.SelectedValue is int id ? id : null, _manufacturer.Text, _barcode.Text, _description.Text, _purchase.Value, _sale.Value, (int)_minimum.Value, _unit.Text);
+            await _catalog.SaveMedicineWithOpeningStockAsync(new MedicineWithOpeningStockInput(medicineInput, _batchNumber.Text, _batchExpiry.Checked ? DateOnly.FromDateTime(_batchExpiry.Value) : null, (int)_openingQuantity.Value));
             DialogResult = DialogResult.OK;
             Close();
         }

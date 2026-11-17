@@ -7,12 +7,13 @@ namespace PharmacyManagement.Infrastructure.Services;
 
 public sealed class DashboardService(PharmacyDbContext db) : IDashboardService
 {
-    public async Task<DashboardSummary> GetSummaryAsync(CancellationToken cancellationToken = default)
+    public async Task<DashboardSummary> GetSummaryAsync(int expiryAlertDays = 90, CancellationToken cancellationToken = default)
     {
+        expiryAlertDays = Math.Clamp(expiryAlertDays, 0, 3650);
         var localDayStart = DateTime.Today;
         var todayUtc = localDayStart.ToUniversalTime();
         var tomorrowUtc = localDayStart.AddDays(1).ToUniversalTime();
-        var nearExpiry = DateOnly.FromDateTime(localDayStart.AddDays(90));
+        var nearExpiry = DateOnly.FromDateTime(localDayStart.AddDays(expiryAlertDays));
 
         var medicines = await db.Medicines.AsNoTracking().Where(x => x.IsActive).Select(x => new
         {

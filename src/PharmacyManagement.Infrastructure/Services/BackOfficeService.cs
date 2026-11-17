@@ -190,9 +190,15 @@ public sealed class BackOfficeService(PharmacyDbContext db, IUserSession session
         entity.PharmacyName = settings.PharmacyName.Trim();
         entity.Address = Clean(settings.Address);
         entity.Phone = Clean(settings.Phone);
+        entity.LogoPath = Clean(settings.LogoPath);
         entity.CurrencyCode = string.IsNullOrWhiteSpace(settings.CurrencyCode) ? "PKR" : settings.CurrencyCode.Trim().ToUpperInvariant();
         entity.InvoicePrefix = string.IsNullOrWhiteSpace(settings.InvoicePrefix) ? "INV" : settings.InvoicePrefix.Trim();
         entity.ExpiryAlertDays = settings.ExpiryAlertDays;
+        entity.ShowDashboardSales = settings.ShowDashboardSales;
+        entity.ShowDashboardMedicines = settings.ShowDashboardMedicines;
+        entity.ShowDashboardStock = settings.ShowDashboardStock;
+        entity.ShowDashboardLowStock = settings.ShowDashboardLowStock;
+        entity.ShowDashboardExpiry = settings.ShowDashboardExpiry;
         await db.SaveChangesAsync(cancellationToken);
     }
 

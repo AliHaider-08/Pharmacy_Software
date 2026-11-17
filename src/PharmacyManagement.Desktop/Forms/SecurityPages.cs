@@ -2,6 +2,42 @@ using PharmacyManagement.Application.Abstractions;
 
 namespace PharmacyManagement.Desktop.Forms;
 
+internal sealed class AdminWorkspacePasswordDialog : Form
+{
+    private readonly TextBox _password = new() { UseSystemPasswordChar = true, Dock = DockStyle.Fill };
+    public string Password => _password.Text;
+
+    public AdminWorkspacePasswordDialog(string username)
+    {
+        Text = "Unlock Admin workspace";
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        ClientSize = new Size(430, 190);
+        MaximizeBox = false;
+        MinimizeBox = false;
+        BackColor = PharmacyColors.Background;
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Padding = new Padding(20) };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 105));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        Controls.Add(layout);
+        var title = new Label { Text = "Admin access required", AutoSize = true, Font = new Font("Segoe UI Semibold", 15f, FontStyle.Bold), ForeColor = PharmacyColors.Text, Margin = new Padding(0, 0, 0, 12) };
+        layout.Controls.Add(title, 0, 0);
+        layout.SetColumnSpan(title, 2);
+        layout.Controls.Add(new Label { Text = $"Account: {username}", AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = PharmacyColors.Muted }, 0, 1);
+        layout.Controls.Add(_password, 1, 1);
+        var cancel = DataPage.ActionButton("Cancel");
+        var unlock = DataPage.ActionButton("Unlock", true);
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
+        actions.Controls.Add(unlock);
+        actions.Controls.Add(cancel);
+        layout.Controls.Add(actions, 1, 2);
+        unlock.Click += (_, _) => { if (string.IsNullOrEmpty(Password)) { MessageBox.Show("Enter your password to continue."); return; } DialogResult = DialogResult.OK; Close(); };
+        cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
+        AcceptButton = unlock;
+        CancelButton = cancel;
+    }
+}
+
 public sealed class FirstRunSetupDialog : Form
 {
     private readonly TextBox _username = new();

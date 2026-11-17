@@ -28,6 +28,23 @@ public sealed class UserService(PharmacyDbContext db, IUserSession session) : IU
         return new AuthenticatedUser(user.Id, user.Username, user.Role);
     }
 
+    public async Task<bool> VerifyCurrentPasswordAsync(string password, CancellationToken cancellationToken = default)
+    {
+        if (session.Current is not { } current) return false;
+        var user = await db.Users.SingleOrDefaultAsync(x => x.Id == current.Id && x.IsActive, cancellationToken);
+        var verified = user is not null && VerifyPassword(password, user.PasswordHash);
+        db.AuditLogs.Add(new AuditLog
+        {
+            UserId = user?.Id,
+            OccurredAtUtc = DateTime.UtcNow,
+            Action = verified ? "Admin workspace unlocked" : "Admin workspace unlock failed",
+            EntityName = "AppUser",
+            EntityId = current.Id.ToString()
+        });
+        await db.SaveChangesAsync(cancellationToken);
+        return verified;
+    }
+
     public async Task<AuthenticatedUser?> RecoverAdministratorPasswordAsync(string username, string newPassword, CancellationToken cancellationToken = default)
     {
         ValidatePassword(newPassword);
