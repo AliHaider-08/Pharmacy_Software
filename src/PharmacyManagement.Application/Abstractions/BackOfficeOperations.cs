@@ -29,6 +29,8 @@ public interface IBackOfficeService
 
 public interface IDatabaseBackupService
 {
+    string DatabasePath { get; }
+    Task CheckConnectionAsync(CancellationToken cancellationToken = default);
     Task CreateBackupAsync(string destinationPath, CancellationToken cancellationToken = default);
     Task RestoreBackupAsync(string sourcePath, CancellationToken cancellationToken = default);
 }

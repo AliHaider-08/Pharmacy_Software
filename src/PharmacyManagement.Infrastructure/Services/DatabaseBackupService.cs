@@ -8,6 +8,21 @@ namespace PharmacyManagement.Infrastructure.Services;
 public sealed class DatabaseBackupService(PharmacyDbContext db, IUserSession session) : IDatabaseBackupService
 {
     private readonly string _databasePath = db.Database.GetDbConnection().DataSource;
+    public string DatabasePath => Path.GetFullPath(_databasePath);
+
+    public async Task CheckConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        UserAuthorization.RequireAdministrator(session);
+        await db.Database.OpenConnectionAsync(cancellationToken);
+        try
+        {
+            await using var command = db.Database.GetDbConnection().CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table';";
+            var tableCount = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+            if (tableCount == 0) throw new InvalidOperationException("The database is connected, but it has no application tables.");
+        }
+        finally { await db.Database.CloseConnectionAsync(); }
+    }
 
     public async Task CreateBackupAsync(string destinationPath, CancellationToken cancellationToken = default)
     {

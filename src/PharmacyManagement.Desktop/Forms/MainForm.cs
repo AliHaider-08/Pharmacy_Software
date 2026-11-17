@@ -18,12 +18,16 @@ public sealed class MainForm : Form
     private readonly Panel _pageHost = new() { Dock = DockStyle.Fill, BackColor = Workspace };
     private readonly Label _status = new() { AutoSize = true, ForeColor = Color.FromArgb(35, 134, 91), Text = "●  Local database ready", Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
     private readonly Dictionary<string, Button> _navigation = new();
+    private FlowLayoutPanel _navigationPanel = null!;
+    private string _workspace = "Sales";
 
     public MainForm(IDashboardService dashboard, ICatalogService catalog, IInventoryService inventory, ISalesService sales, IBackOfficeService backOffice, IDatabaseBackupService backup, IReportService reports, IUserService userService, IUserSession session)
     {
         _dashboard = dashboard; _catalog = catalog; _inventory = inventory; _sales = sales; _backOffice = backOffice; _backup = backup; _reports = reports; _userService = userService; _session = session;
         Text = "Pharmacy Management"; StartPosition = FormStartPosition.CenterScreen; WindowState = FormWindowState.Maximized; MinimumSize = new Size(1060, 700); Size = new Size(1440, 900); BackColor = Workspace; Font = new Font("Segoe UI", 9.5f);
-        BuildLayout(); Navigate("Dashboard");
+        BuildLayout();
+        BuildSalesNavigation();
+        Navigate("Sales / POS");
     }
 
     private void BuildLayout()
@@ -37,16 +41,15 @@ public sealed class MainForm : Form
         sidebarLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         sidebarLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         sidebar.Controls.Add(sidebarLayout);
-        sidebarLayout.Controls.Add(new Label { Text = "✚  PHARMACY\n     MANAGEMENT", Dock = DockStyle.Fill, ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 12f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-        sidebarLayout.Controls.Add(new Label { Text = "WORKSPACE", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(151, 171, 193), Font = new Font("Segoe UI", 8f, FontStyle.Bold), TextAlign = ContentAlignment.BottomLeft, Padding = new Padding(10, 0, 0, 6) }, 0, 1);
-        var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = SidebarColor, Margin = Padding.Empty, Padding = Padding.Empty };
-        sidebarLayout.Controls.Add(nav, 0, 2);
-        AddNav(nav, "Dashboard", "▦"); AddNav(nav, "Medicines", "▤"); AddNav(nav, "Sales / POS", "▣");
-        if (_session.Current?.Role is "Administrator" or "Manager")
-        {
-            AddNav(nav, "Categories", "▧"); AddNav(nav, "Inventory", "▥"); AddNav(nav, "Purchases", "▥"); AddNav(nav, "Suppliers", "♙"); AddNav(nav, "Customers", "♧"); AddNav(nav, "Expenses", "◷"); AddNav(nav, "Reports", "▧");
-        }
-        if (_session.Current?.Role == "Administrator") { AddNav(nav, "Backup & restore", "↻"); AddNav(nav, "Settings", "⚙"); AddNav(nav, "User management", "♙"); }
+        sidebarLayout.Controls.Add(new Label { Text = "✚  SIMPLE PHARMACY", Dock = DockStyle.Fill, ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 12f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        var workspaceButton = new Button { Text = "Sales workspace  ▾", Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(36, 91, 143), ForeColor = Color.White, Font = new Font("Segoe UI", 9f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), Cursor = Cursors.Hand };
+        workspaceButton.FlatAppearance.BorderSize = 0;
+        workspaceButton.Text = _session.Current?.Role == "Cashier" ? "Sales workspace" : "Enter Admin workspace 🔒";
+        workspaceButton.Enabled = _session.Current?.Role is "Administrator" or "Manager";
+        workspaceButton.Click += async (_, _) => await ToggleWorkspaceAsync(workspaceButton);
+        sidebarLayout.Controls.Add(workspaceButton, 0, 1);
+        _navigationPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = SidebarColor, Margin = Padding.Empty, Padding = Padding.Empty };
+        sidebarLayout.Controls.Add(_navigationPanel, 0, 2);
         sidebarLayout.Controls.Add(new Label { Text = "LOCAL · OFFLINE", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(151, 171, 193), Font = new Font("Segoe UI", 8f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft }, 0, 3);
 
         var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(30, 20, 30, 24), BackColor = Workspace };
@@ -63,6 +66,53 @@ public sealed class MainForm : Form
         header.Controls.Add(logout);
     }
 
+    private void BuildSalesNavigation()
+    {
+        _workspace = "Sales";
+        _navigation.Clear();
+        _navigationPanel.Controls.Clear();
+        AddNav(_navigationPanel, "Sales / POS", "▣");
+    }
+
+    private void BuildAdminNavigation()
+    {
+        _workspace = "Admin";
+        _navigation.Clear();
+        _navigationPanel.Controls.Clear();
+        AddNav(_navigationPanel, "Dashboard", "▦");
+        AddNav(_navigationPanel, "Medicines", "▤");
+        AddNav(_navigationPanel, "Inventory", "▥");
+        AddNav(_navigationPanel, "Reports", "▧");
+        if (_session.Current?.Role == "Administrator")
+        {
+            AddNav(_navigationPanel, "Settings", "⚙");
+            AddNav(_navigationPanel, "Database", "▣");
+            AddNav(_navigationPanel, "User management", "♙");
+        }
+        AddNav(_navigationPanel, "Sales / POS", "▣");
+    }
+
+    private async Task ToggleWorkspaceAsync(Button workspaceButton)
+    {
+        if (_session.Current?.Role is not ("Administrator" or "Manager")) return;
+        if (_workspace == "Sales")
+        {
+            using var unlock = new AdminWorkspacePasswordDialog(_session.Current.Username);
+            if (unlock.ShowDialog(this) != DialogResult.OK) return;
+            try
+            {
+                if (!await _userService.VerifyCurrentPasswordAsync(unlock.Password))
+                {
+                    MessageBox.Show("The password is incorrect. Admin workspace remains locked.", "Access denied", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+            catch (Exception ex) { DataPage.ShowError(ex); return; }
+            BuildAdminNavigation(); workspaceButton.Text = "Admin workspace · unlocked ▾"; Navigate("Dashboard");
+        }
+        else { BuildSalesNavigation(); workspaceButton.Text = "Sales workspace  ▾"; Navigate("Sales / POS"); }
+    }
+
     private void AddNav(FlowLayoutPanel panel, string page, string icon)
     {
         var button = new Button { Text = $"{icon}   {page}", Width = 184, Height = 36, Margin = new Padding(0, 2, 0, 2), FlatStyle = FlatStyle.Flat, BackColor = SidebarColor, ForeColor = Color.FromArgb(202, 214, 228), TextAlign = ContentAlignment.MiddleLeft, Font = new Font("Segoe UI", 9f), Padding = new Padding(10, 0, 0, 0), Cursor = Cursors.Hand };
@@ -77,6 +127,11 @@ public sealed class MainForm : Form
 
     private void Navigate(string page)
     {
+        var role = _session.Current?.Role;
+        if (page is "Settings" or "Database" or "User management" && role != "Administrator") page = "Dashboard";
+        if (page is "Inventory" or "Reports" && role is not ("Administrator" or "Manager")) page = "Sales / POS";
+        if (page is "Dashboard" or "Medicines" && role == "Cashier") page = "Sales / POS";
+        if (_workspace == "Sales" && page != "Sales / POS") page = "Sales / POS";
         foreach (var item in _navigation)
         {
             var selected = item.Key == page; item.Value.BackColor = selected ? Color.FromArgb(36, 91, 143) : SidebarColor; item.Value.ForeColor = selected ? Color.White : Color.FromArgb(202, 214, 228); item.Value.Font = new Font("Segoe UI", 9.5f, selected ? FontStyle.Bold : FontStyle.Regular);
@@ -85,16 +140,11 @@ public sealed class MainForm : Form
         UserControl control = page switch
         {
             "Medicines" => new MedicinesPage(_catalog),
-            "Categories" => new CategoriesPage(_catalog),
             "Inventory" => new InventoryPage(_catalog, _inventory),
             "Sales / POS" => new PointOfSalePage(_catalog, _inventory, _sales, _backOffice),
-            "Purchases" => new PurchasesPage(_backOffice, _catalog),
-            "Suppliers" => new SuppliersPage(_backOffice),
-            "Customers" => new CustomersPage(_backOffice),
-            "Expenses" => new ExpensesPage(_backOffice),
-            "Reports" => new ReportsPage(_reports),
-            "Backup & restore" => new BackupPage(_backup),
-            "Settings" => new SettingsPage(_backOffice),
+            "Settings" when _session.Current?.Role == "Administrator" => new SettingsPage(_backOffice),
+            "Database" when _session.Current?.Role == "Administrator" => new DatabaseInfoPage(_backup),
+            "Reports" when _session.Current?.Role is "Administrator" or "Manager" => new ReportsPage(_reports),
             "User management" when _session.Current?.Role == "Administrator" => new UserManagementPage(_userService, _session),
             _ => new DashboardPage(_dashboard, _backOffice)
         };
