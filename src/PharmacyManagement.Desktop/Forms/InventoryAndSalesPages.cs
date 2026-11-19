@@ -1,5 +1,7 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing.Printing;
+using System.Text;
 using PharmacyManagement.Application.Abstractions;
 using PharmacyManagement.Domain.Entities;
 
@@ -176,9 +178,13 @@ public sealed class PointOfSalePage : DataPage
     private readonly IBackOfficeService _settings;
     private readonly BindingList<CartRow> _cart = new();
     private IReadOnlyList<StockBatchListItem> _batches = [];
-    private readonly ListBox _products = new() { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, IntegralHeight = false };
+    private IReadOnlyList<MedicineListItem> _availableMedicines = [];
+    private readonly ListBox _products = new() { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, IntegralHeight = false, Font = new Font("Segoe UI", 10f), ItemHeight = 42 };
     private readonly Dictionary<int, string> _productLabels = new();
-    private readonly SplitContainer _workspace = new() { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, FixedPanel = FixedPanel.Panel1, BackColor = Color.White };
+    private readonly Panel _cartPanel = new() { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(14) };
+    private readonly Label _cartHeading = new() { Text = "Current bill", Dock = DockStyle.Top, Height = 38, Font = new Font("Segoe UI Semibold", 14f, FontStyle.Bold), ForeColor = PharmacyColors.Text };
+    private readonly Label _cartHint = new() { Text = "Choose a medicine to start a sale", Dock = DockStyle.Bottom, Height = 30, Font = new Font("Segoe UI", 9f), ForeColor = PharmacyColors.Muted, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly SplitContainer _workspace = new() { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, BackColor = Color.White, Panel1MinSize = 0, Panel2MinSize = 0 };
     private string _currencyCode = "PKR";
     private readonly Label _total = new() { AutoSize = true, Font = new Font("Segoe UI Semibold", 16f, FontStyle.Bold), ForeColor = PharmacyColors.Navy, Margin = new Padding(12, 7, 12, 4) };
 
@@ -189,35 +195,42 @@ public sealed class PointOfSalePage : DataPage
         _sales = sales;
         _settings = settings;
         SearchBox.PlaceholderText = "Scan barcode or search medicine…";
-        var add = ActionButton("Add to cart", true);
         var recent = ActionButton("Recent sales");
-        var checkout = ActionButton("Checkout");
+        var checkout = ActionButton("Generate bill  →", true);
+        checkout.Height = 40;
+        SearchBox.Width = 370;
+        SearchBox.Margin = new Padding(0, 6, 10, 4);
         Toolbar.Controls.Add(SearchBox);
-        Toolbar.Controls.Add(add);
         Toolbar.Controls.Add(_total);
         Toolbar.Controls.Add(recent);
         Toolbar.Controls.Add(checkout);
-        add.Click += async (_, _) => await AddFromSearchAsync();
+        SearchBox.TextChanged += (_, _) => FilterProducts();
         SearchBox.KeyDown += async (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await AddFromSearchAsync(); } };
         recent.Click += async (_, _) => await ShowRecentSalesAsync();
         checkout.Click += async (_, _) => await CheckoutAsync();
         Grid.AutoGenerateColumns = false;
-        Grid.AllowUserToDeleteRows = true;
+        Grid.AllowUserToDeleteRows = false;
+        Grid.ReadOnly = true;
+        Grid.RowTemplate.Height = 42;
         Grid.Columns.Add(new DataGridViewTextBoxColumn { Name = nameof(CartRow.Name), DataPropertyName = nameof(CartRow.Name), HeaderText = "Medicine", ReadOnly = true, FillWeight = 55 });
-        Grid.Columns.Add(new DataGridViewTextBoxColumn { Name = nameof(CartRow.Quantity), DataPropertyName = nameof(CartRow.Quantity), HeaderText = "Quantity", ReadOnly = false, FillWeight = 15 });
+        Grid.Columns.Add(new DataGridViewButtonColumn { Name = "Decrease", HeaderText = "", Text = "−", UseColumnTextForButtonValue = true, FillWeight = 9, FlatStyle = FlatStyle.Flat });
+        Grid.Columns.Add(new DataGridViewTextBoxColumn { Name = nameof(CartRow.Quantity), DataPropertyName = nameof(CartRow.Quantity), HeaderText = "Qty", ReadOnly = true, FillWeight = 9 });
+        Grid.Columns.Add(new DataGridViewButtonColumn { Name = "Increase", HeaderText = "", Text = "+", UseColumnTextForButtonValue = true, FillWeight = 9, FlatStyle = FlatStyle.Flat });
         Grid.Columns.Add(new DataGridViewTextBoxColumn { Name = nameof(CartRow.Available), DataPropertyName = nameof(CartRow.Available), HeaderText = "Available", ReadOnly = true, FillWeight = 15 });
         Grid.Columns.Add(new DataGridViewTextBoxColumn { Name = nameof(CartRow.Amount), DataPropertyName = nameof(CartRow.Amount), HeaderText = "Line total", ReadOnly = true, FillWeight = 25, DefaultCellStyle = new DataGridViewCellStyle { Format = "N2" } });
         Grid.DataSource = _cart;
-        Grid.CellEndEdit += (_, e) => { if (e.RowIndex >= 0) UpdateCartRow(e.RowIndex); };
-        Grid.DataError += (_, e) => { e.ThrowException = false; if (e.RowIndex >= 0) UpdateCartRow(e.RowIndex); };
-        Grid.UserDeletedRow += (_, _) => UpdateTotal();
+        Grid.CellContentClick += (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex >= 0) AdjustQuantity(e.RowIndex, Grid.Columns[e.ColumnIndex].Name == "Increase" ? 1 : -1); };
         _products.Format += (_, e) => { if (e.ListItem is MedicineListItem medicine && _productLabels.TryGetValue(medicine.Id, out var label)) e.Value = label; };
-        _products.DoubleClick += async (_, _) => { if (_products.SelectedItem is MedicineListItem item) await AddMedicineToCartAsync(item); };
+        _products.Click += async (_, _) => { if (_products.SelectedItem is MedicineListItem item) await AddMedicineToCartAsync(item); };
+        _products.KeyDown += async (_, e) => { if (e.KeyCode == Keys.Enter && _products.SelectedItem is MedicineListItem item) { e.SuppressKeyPress = true; await AddMedicineToCartAsync(item); } };
         var productPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(12) };
         productPanel.Controls.Add(_products);
-        productPanel.Controls.Add(new Label { Text = "IN STOCK", Dock = DockStyle.Top, Height = 30, ForeColor = PharmacyColors.Muted, Font = new Font("Segoe UI", 8f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft });
-        _workspace.Panel1.Controls.Add(productPanel);
-        _workspace.Panel2.Controls.Add(Grid);
+        productPanel.Controls.Add(new Label { Text = "IN STOCK · SELECT TO ADD", Dock = DockStyle.Top, Height = 34, ForeColor = PharmacyColors.Muted, Font = new Font("Segoe UI", 8f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft });
+        _cartPanel.Controls.Add(Grid);
+        _cartPanel.Controls.Add(_cartHint);
+        _cartPanel.Controls.Add(_cartHeading);
+        _workspace.Panel1.Controls.Add(_cartPanel);
+        _workspace.Panel2.Controls.Add(productPanel);
         var posLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(4, 2, 4, 4), BackColor = PharmacyColors.Background };
         posLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
         posLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
@@ -230,14 +243,24 @@ public sealed class PointOfSalePage : DataPage
         posLayout.Controls.Add(heading, 0, 0);
         posLayout.Controls.Add(Toolbar, 0, 1);
         posLayout.Controls.Add(_workspace, 0, 2);
-        _workspace.SplitterDistance = 310;
-        Load += async (_, _) => { try { _currencyCode = (await _settings.GetSettingsAsync()).CurrencyCode; Grid.Columns[nameof(CartRow.Amount)]!.HeaderText = $"Line total ({_currencyCode})"; UpdateTotal(); } catch (Exception ex) { ShowError(ex); } await ReloadBatchesAsync(); await RefreshProductsAsync(); };
+        _workspace.SizeChanged += (_, _) => SetWorkspaceSplit();
+        Load += async (_, _) => { try { _currencyCode = (await Task.Run(() => _settings.GetSettingsAsync())).CurrencyCode; Grid.Columns[nameof(CartRow.Amount)]!.HeaderText = $"Line total ({_currencyCode})"; UpdateTotal(); } catch (Exception ex) { ShowError(ex); } await ReloadBatchesAsync(); await RefreshProductsAsync(); };
         UpdateTotal();
+    }
+
+    private void SetWorkspaceSplit()
+    {
+        if (_workspace.Width <= 0 || _workspace.IsDisposed) return;
+        var usableWidth = Math.Max(1, _workspace.Width - _workspace.SplitterWidth);
+        var desired = Math.Clamp((int)(usableWidth * .58), 280, Math.Max(280, usableWidth - 240));
+        desired = Math.Min(desired, usableWidth);
+        try { _workspace.SplitterDistance = desired; }
+        catch (InvalidOperationException) { /* WinForms may resize the parent between layout events; SizeChanged retries with the final width. */ }
     }
 
     private async Task ReloadBatchesAsync()
     {
-        try { _batches = await _inventory.GetBatchesAsync(); }
+        try { _batches = await Task.Run(() => _inventory.GetBatchesAsync()); }
         catch (Exception ex) { ShowError(ex); }
     }
 
@@ -245,7 +268,7 @@ public sealed class PointOfSalePage : DataPage
     {
         try
         {
-            var medicines = await _catalog.SearchMedicinesAsync();
+            var medicines = await Task.Run(() => _catalog.SearchMedicinesAsync());
             var stockedIds = _batches.Where(x => x.Quantity > 0 && (x.ExpiryDate is null || x.ExpiryDate >= DateOnly.FromDateTime(DateTime.Today))).Select(x => x.MedicineId).ToHashSet();
             var available = medicines.Where(x => stockedIds.Contains(x.Id)).ToList();
             _productLabels.Clear();
@@ -256,11 +279,22 @@ public sealed class PointOfSalePage : DataPage
                 var price = batches.FirstOrDefault()?.SalePrice ?? medicine.SalePrice;
                 _productLabels[medicine.Id] = $"{medicine.Name}  ·  {quantity} in stock  ·  {_currencyCode} {price:N2}";
             }
-            _products.DataSource = null;
-            _products.DisplayMember = nameof(MedicineListItem.Name);
-            _products.DataSource = available;
+            _availableMedicines = available;
+            FilterProducts();
         }
         catch (Exception ex) { ShowError(ex); }
+    }
+
+    private void FilterProducts()
+    {
+        var query = SearchBox.Text.Trim();
+        var filtered = string.IsNullOrEmpty(query) ? _availableMedicines : _availableMedicines.Where(x => x.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || (x.Barcode?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        var prior = _products.SelectedItem as MedicineListItem;
+        _products.DataSource = null;
+        _products.DisplayMember = nameof(MedicineListItem.Name);
+        _products.DataSource = filtered;
+        if (prior is not null) _products.SelectedItem = filtered.FirstOrDefault(x => x.Id == prior.Id);
+        if (filtered.Count == 1 && !string.IsNullOrWhiteSpace(query)) _products.SelectedIndex = 0;
     }
 
     private async Task AddFromSearchAsync()
@@ -279,7 +313,7 @@ public sealed class PointOfSalePage : DataPage
         }
         try
         {
-            var matches = await _catalog.SearchMedicinesAsync(query);
+            var matches = await Task.Run(() => _catalog.SearchMedicinesAsync(query));
             if (matches.Count == 0) { MessageBox.Show("No active medicine matched that name or barcode."); return; }
             MedicineListItem? medicine;
             var exactBarcode = matches.FirstOrDefault(x => string.Equals(x.Barcode, query, StringComparison.OrdinalIgnoreCase));
@@ -287,6 +321,8 @@ public sealed class PointOfSalePage : DataPage
             else if (matches.Count == 1) medicine = matches[0];
             else medicine = ChooseMedicine(matches);
             if (medicine is null) return;
+            if (!_batches.Any(x => x.MedicineId == medicine.Id && x.Quantity > 0 && (x.ExpiryDate is null || x.ExpiryDate >= DateOnly.FromDateTime(DateTime.Today))))
+            { MessageBox.Show($"{medicine.Name} has no unexpired stock."); return; }
             await ReloadBatchesAsync();
             await AddMedicineToCartAsync(medicine);
         }
@@ -317,6 +353,8 @@ public sealed class PointOfSalePage : DataPage
             }
             SearchBox.Clear();
             UpdateTotal();
+            _cartHeading.Text = $"Current bill · {_cart.Count} item{(_cart.Count == 1 ? "" : "s")}";
+            _cartHint.Text = _cart.Count == 0 ? "Choose a medicine to start a sale" : "Adjust quantity, then generate the bill";
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -360,22 +398,18 @@ public sealed class PointOfSalePage : DataPage
         return remaining > 0 ? 0 : decimal.Round(amount, 2, MidpointRounding.AwayFromZero);
     }
 
-    private void UpdateCartRow(int rowIndex)
+    private void AdjustQuantity(int rowIndex, int change)
     {
-        if (rowIndex >= _cart.Count) return;
+        if (rowIndex < 0 || rowIndex >= _cart.Count) return;
         var row = _cart[rowIndex];
         row.Available = EligibleBatches(row.MedicineId).Sum(x => x.Quantity);
-        var cellValue = Grid.Rows[rowIndex].Cells[nameof(CartRow.Quantity)].Value;
-        if (!int.TryParse(Convert.ToString(cellValue), out var quantity) || quantity <= 0 || quantity > row.Available)
-        {
-            MessageBox.Show($"Quantity must be between 1 and {row.Available}.");
-            Grid.Rows[rowIndex].Cells[nameof(CartRow.Quantity)].Value = row.Quantity;
-            return;
-        }
-        row.Quantity = quantity;
-        row.Amount = Estimate(row);
-        _cart.ResetItem(rowIndex);
+        var quantity = row.Quantity + change;
+        if (quantity <= 0) { _cart.RemoveAt(rowIndex); }
+        else if (quantity > row.Available) { MessageBox.Show($"Only {row.Available} unexpired units are available."); return; }
+        else { row.Quantity = quantity; row.Amount = Estimate(row); _cart.ResetItem(rowIndex); }
         UpdateTotal();
+        _cartHeading.Text = $"Current bill · {_cart.Count} item{(_cart.Count == 1 ? "" : "s")}";
+        _cartHint.Text = _cart.Count == 0 ? "Choose a medicine to start a sale" : "Adjust quantity, then generate the bill";
     }
 
     private decimal Subtotal() => _cart.Sum(x => x.Amount);
@@ -389,6 +423,7 @@ public sealed class PointOfSalePage : DataPage
         if (subtotal <= 0) { MessageBox.Show("The cart has no valid stock available."); return; }
         using var payment = new PaymentDialog(subtotal, _currencyCode);
         if (payment.ShowDialog(FindForm()) != DialogResult.OK) return;
+        Enabled = false;
         try
         {
             Grid.EndEdit();
@@ -398,51 +433,66 @@ public sealed class PointOfSalePage : DataPage
                     MessageBox.Show($"Quantity for {cartRow.Name} must be between 1 and {cartRow.Available}.");
                     return;
                 }
-            var result = await _sales.CheckoutAsync(new CheckoutRequest(_cart.Select(x => new CartLineRequest(x.MedicineId, x.Quantity)).ToList(), payment.Discount, payment.Paid, payment.Method));
+            var request = new CheckoutRequest(_cart.Select(x => new CartLineRequest(x.MedicineId, x.Quantity)).ToList(), payment.Discount, payment.Paid, payment.Method);
+            var result = await Task.Run(() => _sales.CheckoutAsync(request));
             _cart.Clear();
+            _cartHeading.Text = "Current bill";
+            _cartHint.Text = "Choose a medicine to start a sale";
             await ReloadBatchesAsync();
             await RefreshProductsAsync();
             UpdateTotal();
-            if (payment.PrintReceipt)
+            ReceiptDialog? receipt = null;
+            try
             {
-                try
-                {
-                    var settings = await _settings.GetSettingsAsync();
-                    using var receipt = new ReceiptDialog(result, settings);
-                    receipt.ShowDialog(FindForm());
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Sale {result.InvoiceNumber} was saved, but the receipt could not be printed. You can reprint it from Recent sales.\n\n{ex.Message}", "Sale saved · print issue", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
+                var settings = await Task.Run(() => _settings.GetSettingsAsync());
+                receipt = new ReceiptDialog(result, settings);
+                await receipt.SavePdfToStoreAsync();
             }
+            catch (Exception ex) { MessageBox.Show($"Sale {result.InvoiceNumber} is saved in the database, but its PDF could not be stored. You can retry with Show PDF in Recent sales.\n\n{ex.Message}", "Sale saved · PDF storage issue", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            if (payment.ShowReceipt && receipt is not null) { Enabled = true; receipt.Show(FindForm()); }
         }
         catch (Exception ex) { ShowError(ex); }
+        finally { if (!IsDisposed) Enabled = true; }
     }
 
     private async Task ShowRecentSalesAsync()
     {
         try
         {
-            var rows = await _sales.GetRecentSalesAsync();
+            var rows = await Task.Run(() => _sales.GetRecentSalesAsync());
             using var form = new Form { Text = "Recent sales", StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(760, 430) };
             var grid = new DataGridView { Dock = DockStyle.Fill, DataSource = rows, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false };
-            var reprint = ActionButton("Print selected receipt", true);
-            reprint.Dock = DockStyle.Bottom;
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
+            var reprint = ActionButton("Print selected receipt");
+            var showPdf = ActionButton("Show PDF", true);
+            actions.Controls.Add(reprint);
+            actions.Controls.Add(showPdf);
             reprint.Click += async (_, _) =>
             {
                 if (grid.CurrentRow?.DataBoundItem is not SaleListItem selected) { MessageBox.Show("Select a sale first."); return; }
                 try
                 {
-                    var sale = await _sales.GetReceiptAsync(selected.InvoiceNumber);
-                    var settings = await _settings.GetSettingsAsync();
+                    var sale = await Task.Run(() => _sales.GetReceiptAsync(selected.InvoiceNumber));
+                    var settings = await Task.Run(() => _settings.GetSettingsAsync());
                     using var receipt = new ReceiptDialog(sale, settings);
                     receipt.ShowDialog(form);
                 }
                 catch (Exception ex) { ShowError(ex); }
             };
+            showPdf.Click += async (_, _) =>
+            {
+                if (grid.CurrentRow?.DataBoundItem is not SaleListItem selected) { MessageBox.Show("Select a sale first."); return; }
+                try
+                {
+                    var sale = await Task.Run(() => _sales.GetReceiptAsync(selected.InvoiceNumber));
+                    var settings = await Task.Run(() => _settings.GetSettingsAsync());
+                    using var receipt = new ReceiptDialog(sale, settings);
+                    await receipt.ShowStoredPdfAsync();
+                }
+                catch (Exception ex) { ShowError(ex); }
+            };
             form.Controls.Add(grid);
-            form.Controls.Add(reprint);
+            form.Controls.Add(actions);
             form.ShowDialog(FindForm());
         }
         catch (Exception ex) { ShowError(ex); }
@@ -484,9 +534,11 @@ internal sealed class ReceiptDialog : Form
         MaximizeBox = false;
         var preview = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, Font = new Font("Consolas", 10f), BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle, Text = BuildText() };
         var print = DataPage.ActionButton("Print receipt", true);
+        var savePdf = DataPage.ActionButton("Save as PDF");
+        var showPdf = DataPage.ActionButton("Show PDF");
         var close = DataPage.ActionButton("Close");
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
-        footer.Controls.Add(close); footer.Controls.Add(print);
+        footer.Controls.Add(close); footer.Controls.Add(savePdf); footer.Controls.Add(showPdf); footer.Controls.Add(print);
         Controls.Add(preview); Controls.Add(footer);
         _document.DocumentName = $"Receipt {_sale.InvoiceNumber}";
         _document.DefaultPageSettings.Margins = new Margins(8, 8, 8, 8);
@@ -495,6 +547,8 @@ internal sealed class ReceiptDialog : Form
         _document.PrintPage += PrintPage;
         _document.BeginPrint += (_, _) => { _firstPrintPage = true; _nextPrintLine = 0; _printLines = []; };
         print.Click += async (_, _) => await PrintReceiptAsync(print);
+        savePdf.Click += async (_, _) => await SavePdfAsync(savePdf);
+        showPdf.Click += async (_, _) => await ShowStoredPdfAsync();
         close.Click += (_, _) => Close();
         FormClosed += (_, _) => { _document.Dispose(); _logo?.Dispose(); };
     }
@@ -530,17 +584,140 @@ internal sealed class ReceiptDialog : Form
 
     private async Task PrintReceiptAsync(Button printButton)
     {
-        using var dialog = new PrintDialog { Document = _document, UseEXDialog = true, AllowSomePages = false, AllowSelection = false };
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
         printButton.Enabled = false;
         printButton.Text = "Printing…";
         try
         {
-            await Task.Run(() => _document.Print());
-            MessageBox.Show(this, "Receipt sent to the selected printer.", "Print submitted", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            await PrintOnStaThreadAsync();
+            MessageBox.Show(this, "Receipt sent to the default printer.", "Print submitted", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
-        catch (Exception ex) { MessageBox.Show(this, $"The sale is saved, but the printer did not accept the receipt. You can retry from this window or Recent sales.\n\n{ex.Message}", "Print failed", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        catch (Exception ex) { MessageBox.Show(this, $"The sale is saved, but the default printer could not accept the receipt. You can retry from this window or Recent sales.\n\n{ex.Message}", "Print failed", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         finally { if (!IsDisposed) { printButton.Enabled = true; printButton.Text = "Print receipt"; } }
+    }
+
+    private Task PrintOnStaThreadAsync()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try { _document.Print(); completion.TrySetResult(); }
+            catch (Exception ex) { completion.TrySetException(ex); }
+        }) { IsBackground = true, Name = "Pharmacy receipt printer" };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task;
+    }
+
+    private async Task SavePdfAsync(Button saveButton)
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Save sale receipt as PDF",
+            Filter = "PDF document (*.pdf)|*.pdf",
+            DefaultExt = "pdf",
+            AddExtension = true,
+            FileName = $"Receipt-{_sale.InvoiceNumber}.pdf",
+            OverwritePrompt = true
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        saveButton.Enabled = false;
+        saveButton.Text = "Saving…";
+        try
+        {
+            var storedPath = await SavePdfToStoreAsync();
+            await Task.Run(() => File.Copy(storedPath, dialog.FileName, true));
+            MessageBox.Show(this, $"Receipt PDF saved to:\n{dialog.FileName}", "PDF saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not save the receipt PDF.\n\n{ex.Message}", "PDF save failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally { if (!IsDisposed) { saveButton.Enabled = true; saveButton.Text = "Save as PDF"; } }
+    }
+
+    public Task<string> SavePdfToStoreAsync()
+    {
+        var path = StoredPdfPath(_sale.InvoiceNumber);
+        var text = BuildText();
+        return Task.Run(() =>
+        {
+            var directory = Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(directory);
+            var temporaryPath = path + ".tmp";
+            try
+            {
+                WritePdf(temporaryPath, text);
+                File.Move(temporaryPath, path, true);
+            }
+            finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+            return path;
+        });
+    }
+
+    public async Task ShowStoredPdfAsync()
+    {
+        var path = StoredPdfPath(_sale.InvoiceNumber);
+        if (!File.Exists(path)) path = await SavePdfToStoreAsync();
+        await Task.Run(() => Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }));
+    }
+
+    private static string StoredPdfPath(string invoiceNumber)
+    {
+        var safeInvoice = string.Concat(invoiceNumber.Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
+        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PharmacyManagement", "Receipts");
+        return Path.Combine(directory, $"Receipt-{safeInvoice}.pdf");
+    }
+
+    private static void WritePdf(string path, string receiptText)
+    {
+        const int linesPerPage = 52;
+        var lines = receiptText.Split([Environment.NewLine], StringSplitOptions.None);
+        var pages = lines.Chunk(linesPerPage).ToList();
+        var objects = new List<byte[]>();
+        static byte[] Bytes(string value) => System.Text.Encoding.Latin1.GetBytes(value);
+        void Add(string value) => objects.Add(Bytes(value));
+        Add("<< /Type /Catalog /Pages 2 0 R >>");
+        var pageObjectIds = Enumerable.Range(0, pages.Count).Select(i => 5 + i * 2).ToList();
+        Add($"<< /Type /Pages /Kids [{string.Join(" ", pageObjectIds.Select(id => $"{id} 0 R"))}] /Count {pages.Count} >>");
+        Add("<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>");
+        for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
+        {
+            var contentObjectId = 4 + pageIndex * 2;
+            var pageObjectId = contentObjectId + 1;
+            var content = new StringBuilder("BT\n/F1 10 Tf\n48 790 Td\n14 TL\n");
+            foreach (var line in pages[pageIndex])
+            {
+                content.Append('<').Append(Convert.ToHexString(ToWinAnsi(line))).Append("> Tj\nT*\n");
+            }
+            content.Append("ET");
+            var contentBytes = Bytes(content.ToString());
+            Add($"<< /Length {contentBytes.Length} >>\nstream\n{System.Text.Encoding.Latin1.GetString(contentBytes)}\nendstream");
+            Add($"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 3 0 R >> >> /Contents {contentObjectId} 0 R >>");
+        }
+
+        using var output = new MemoryStream();
+        output.Write(Bytes("%PDF-1.4\n%âãÏÓ\n"));
+        var offsets = new List<long> { 0 };
+        for (var i = 0; i < objects.Count; i++)
+        {
+            offsets.Add(output.Position);
+            output.Write(Bytes($"{i + 1} 0 obj\n"));
+            output.Write(objects[i]);
+            output.Write(Bytes("\nendobj\n"));
+        }
+        var xrefPosition = output.Position;
+        output.Write(Bytes($"xref\n0 {objects.Count + 1}\n0000000000 65535 f \n"));
+        foreach (var offset in offsets.Skip(1)) output.Write(Bytes($"{offset:0000000000} 00000 n \n"));
+        output.Write(Bytes($"trailer\n<< /Size {objects.Count + 1} /Root 1 0 R >>\nstartxref\n{xrefPosition}\n%%EOF"));
+        File.WriteAllBytes(path, output.ToArray());
+    }
+
+    private static byte[] ToWinAnsi(string value)
+    {
+        // Keep the receipt portable without requiring CodePagesEncodingProvider at runtime.
+        // Courier with WinAnsiEncoding renders these ASCII bytes consistently; unsupported
+        // medicine-name characters are replaced instead of failing during PDF export.
+        return System.Text.Encoding.ASCII.GetBytes(value);
     }
 
     private void PrintPage(object? sender, PrintPageEventArgs e)
@@ -603,10 +780,10 @@ internal sealed class PaymentDialog : Form
     private readonly decimal _subtotal;
     private readonly string _currencyCode;
     private readonly Label _totalLabel = new() { AutoSize = true, Font = new Font("Segoe UI Semibold", 13f, FontStyle.Bold), ForeColor = PharmacyColors.Navy };
-    private readonly CheckBox _printReceipt = new() { Text = "Print receipt after sale", AutoSize = true, Checked = true };
+    private readonly CheckBox _printReceipt = new() { Text = "Show receipt options after sale", AutoSize = true, Checked = true };
     public decimal Discount => _discount.Value;
     public decimal Paid => _paid.Value;
-    public bool PrintReceipt => _printReceipt.Checked;
+    public bool ShowReceipt => _printReceipt.Checked;
     public string Method => Convert.ToString(_method.SelectedItem) ?? "Cash";
 
     public PaymentDialog(decimal subtotal, string currencyCode)
